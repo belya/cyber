@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 # # Model definitions
 
 # 1. Balances are changing
-# 2. Dynamic parameters are chaning
+# 2. Dynamic parameters are changing
 # 3. Bondings are changing
 # 4. Total inflation is changing
 
@@ -41,10 +41,10 @@ def random_string(string_length=10):
 
 class Network():
     # Constants
-    blocks_per_year = 1/3 * 60 * 60 * 24 * 365 
+    blocks_per_year = 1/5 * 60 * 60 * 24 * 365 
     max_inflation = 0.12
-    min_inflation = 0.5
-    inflation_rate = 0.1
+    min_inflation = 0.05
+    inflation_rate = 0.05
     start_inflation = 0.1
     bonding_goal = 0.9
     
