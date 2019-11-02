@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -20,11 +21,40 @@ import pandas as pd
 import random
 import string
 
+import json
+
 from tqdm import tqdm_notebook
 
 # %matplotlib inline
 import matplotlib.pyplot as plt
 
+# # Genesis parsing
+
+cyber_distribution = json.load(open("./data/cyber_distribution.json"))
+
+del cyber_distribution["total"]
+
+cyber_distribution
+
+# TODO define cosmos and ethereum groups from genesis
+
+synth_genesis = []
+group_size = 1000
+
+for group, amount in cyber_distribution.items():
+    amount = int(amount)
+    for i in range(group_size):
+        agent_params = {
+            'group': group,
+            'balance': amount / group_size,
+            'address': group + str(i)
+        }
+        synth_genesis.append(agent_params)
+
+block_chunk = 1
+
+
+# Аккаунт + количество монет + когорта
 
 # # Model definitions
 
@@ -39,6 +69,10 @@ def random_string(string_length=10):
     return ''.join(random.choice(letters) for i in range(string_length))
 
 
+# 146 default validators
+
+# Proposals!?
+
 class Network():
     # Constants
     blocks_per_year = 1/3 * 60 * 60 * 24 * 365 
@@ -48,12 +82,24 @@ class Network():
     start_inflation = 0.1
     bonding_goal = 0.9
     
-    # Dynamic parameters
+    # Class fields
     block = -1
-    transactions_reward = 0
+    transactions_reward = 0 # Multiple transactions
     inflation = start_inflation
     total_bonding = 0
     total_balance = 0
+    stats = None
+    
+    @classmethod
+    def from_json(self, description, validators=100):
+        network = Network(validators, 0)
+        network.agents = []
+        for agent_description in description:
+            agent = Agent.from_json(network, agent_description)
+            network.agents.append(agent)
+            # TODO add default agent for this
+            network.total_balance += agent.genesis_part
+        return network
     
     def _create_validators(self):
         self.validators = []
@@ -101,10 +147,21 @@ class Network():
         for agent in tqdm_notebook(self.agents):
             agent.act()
             
+    def _update_stats(self):
+        self.stats = {}
+        for agent in self.agents:
+            self.stats[agent.group] = self.stats.get(agent.group, 0) + agent.balance
+        for agent in self.agents:
+            self.stats["unclaimed_" + agent.group] = self.stats.get("unclaimed_" + agent.group, 0) + agent.genesis_part
+        self.stats["inflation"] = self.inflation_rate
+        self.stats["total_balance"] = self.total_balance
+        self.stats["total_bonding"] = self.total_bonding
+            
     def act(self):
         self._increase_block()
         self._act_agents()
         self._act_validators()
+        self._update_stats()
     
     # TODO These methods should be moved to proper locations
 
@@ -142,6 +199,19 @@ class Network():
         agent.balance += validator.reward * rate
 
 
+# # Fast operations
+
+class FastUtils:    
+    @classmethod
+    def do_random_transactions(self):
+        pass
+        # Create random matrices
+        # Normalize, multiply by agent balances
+        # Subtract from senders
+        # Add to recipients
+        # Apply comission
+
+
 class NetworkParticipant():
     network = None
     id = None
@@ -164,9 +234,16 @@ class NetworkParticipant():
 # 3. Get reward from validators 
 # 4. Rebond tokens
 
-# TODO add agent groups with different claim strategy
+# For the cohort of agents:
+# 1. Increase total amount of a cohort
+# 2. Save cohort amount for a block
+# 3. Use genesis file to define group size
+
 class Agent(NetworkParticipant):
+    group = None
+    
     # Constants
+    # Define constants with high influence on results
     max_comission_rate = 0.1
     claim_probability = 0.01
     transaction_probability = 0.9
@@ -176,11 +253,21 @@ class Agent(NetworkParticipant):
     genesis_part = 0
     balance = 0
     
+    @classmethod
+    def from_json(cls, network, description):
+        agent = Agent(network)
+        agent.genesis_part = description['balance']
+        agent.group = description['group']
+        agent.id = description['address']
+        return agent
+    
     def __init__(self, network, genesis_part=100):
         super().__init__(network)
         self.genesis_part = genesis_part
         
     def _claim(self):
+        # TODO claim comission
+        # Periodically
         if np.random.rand() > self.claim_probability:
             return
         
@@ -198,7 +285,8 @@ class Agent(NetworkParticipant):
         comission = np.random.rand() * self.max_comission_rate * total_amount
         amount = total_amount - comission
         self.network.send_transaction(self, receiver, amount, comission)
-        
+     
+    # rename to "delegate"
     def _rebond_tokens(self):
         if np.random.rand() > self.rebond_probability:
             return
@@ -209,6 +297,7 @@ class Agent(NetworkParticipant):
     
     def act(self):
         self._claim()
+        # TODO most consuming
         self._do_random_transaction()
         self._rebond_tokens()
 
@@ -225,6 +314,8 @@ class Agent(NetworkParticipant):
 # 3. Gather all transactions reward
 # 4. Receive block reward depending on voting power
 # 5. Do random event (nothing, double-spend, slowness)
+
+# Validator = agent
 
 class Validator(NetworkParticipant):
     # Dynamic parameters
@@ -247,7 +338,7 @@ class Validator(NetworkParticipant):
         
     def _broadcast_reward(self):
         for agent, stake in self.bonding.items():
-            rate = stake / self.total_bonding
+            rate = stake / (self.total_bonding + 0.000001)
             self.network.send_reward(self, agent, rate)
             
     def act(self):
@@ -268,6 +359,21 @@ def assert_catch_exception(test_function, exception_class):
 
 
 # ## Network
+
+# Network should be created from json
+
+# +
+network = Network.from_json([{
+    "address": "0x1",
+    "balance": 1,
+    "group": "test"
+}], 5)
+
+assert len(network.agents) == 1
+assert network.agents[0].network == network
+assert len(network.validators) == 5
+assert network.total_balance == 1
+# -
 
 # Network should create validators and agents when created
 
@@ -482,6 +588,18 @@ assert_catch_exception(
 )
 # -
 
+# Network should count statistics by groups after each iteration
+
+# +
+network = Network(1, 1)
+agent = network.agents[0]
+agent.balance = 10
+agent.group = "test"
+
+network._update_stats()
+assert network.stats["test"] == 10
+# -
+
 # ## Agent
 
 # Agent should send nonzero random transaction to another agent
@@ -532,6 +650,19 @@ agent._claim()
 assert agent.balance > 0
 assert agent.genesis_part < 100
 # -
+
+# Agent should create itself from json description
+
+network = Network(0, 0)
+agent = Agent.from_json(network, {
+    'address': "0x1",
+    'group': "test",
+    "balance": 110
+})
+assert agent.genesis_part == 110
+assert agent.group == "test"
+assert agent.id == "0x1"
+assert agent.network == network
 
 # ## Validator
 
@@ -584,18 +715,79 @@ assert agent2.balance == (100 - 4) + 20 * 4 / 5
 
 # # Big network evaluation
 
-network = Network(100, 100)
+network = Network.from_json(synth_genesis, 100)
 
+all_stats = []
 for i in tqdm_notebook(range(100)):
     network.act()
+    print(network.stats)
+    all_stats.append(network.stats.copy())
+
+# - add tokens claimed graph (total_genesis - sum)
+# - add grouped balance chart (by cohorts)
+# - add inflation and bonding chart (with bonding goal and max-min inflation)
 
 # # Visualization
 
-# +
-# Target value graph
-# - For each group - count total balance during some years
+# ### Balances by groups
 
 # +
-# Requirements
-# 50% of genesis are diluted in 5 years
-# 10x of genesis are diluted in 100 years
+plt.figure(figsize=(20, 10))
+x = range(len(all_stats))
+y = np.array([
+    [stat[group] for stat in all_stats]
+    for group in cyber_distribution
+])
+
+# y = y / y.sum(axis=0)
+labels = [group for group in cyber_distribution]
+ 
+plt.stackplot(x, y, labels=labels)
+plt.legend()
+plt.show()
+# -
+
+# ### Tokens claimed
+
+# +
+plt.figure(figsize=(20, 10))
+x = range(len(all_stats))
+y = [
+    [stat["unclaimed_" + group] - stat[group] for stat in all_stats]
+    for group in cyber_distribution
+]
+labels = [group for group in cyber_distribution]
+ 
+plt.stackplot(x, y, labels=labels)
+plt.legend()
+plt.show()
+# -
+
+# ### Inflation and bonding
+
+# +
+plt.figure(figsize=(20, 10))
+x = range(len(all_stats))
+bonding_rate_y = [stat["total_bonding"] / stat["total_balance"] for stat in all_stats]
+inflation_y = [stat["inflation"] for stat in all_stats]
+
+plt.plot(x, bonding_rate_y)
+plt.plot(x, inflation_y)
+plt.show()
+# -
+
+# Описание процесса:
+#
+# Вопросы:
+# - Актуальный генезис
+# - Меняется ли количество валидаторов со временем?
+# - Стратегии получения CYB для разных групп генезиса
+# - Кому достается комиссия валидатора?
+# - 
+#
+# Доделать:
+# - Увеличить скорость работы через использование numpy
+# - Начальный агент, который раздает генезис транзакции
+
+# - Параметр роста за итерацию + новая когорта
+# - Дискретизация
