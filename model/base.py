@@ -21,6 +21,14 @@ import pandas as pd
 import random
 import string
 
+from scipy.sparse import random as sparse_random
+
+from scipy import stats
+
+import scipy.sparse as sps
+
+from sklearn.preprocessing import normalize
+
 import json
 
 from tqdm import tqdm_notebook
@@ -36,10 +44,20 @@ del cyber_distribution["total"]
 
 cyber_distribution
 
+cyber_distribution = {'cosmos_drop': '5000000000',
+ 'cybercongress': '4000000000',
+ 'ethereum_drop': '10000000000',
+ 'foundation_auction_multisig': '60000000000',
+ 'game_of_thrones': '20000000000',
+ 'inventors': '2000000000',
+ 'investors': '5000000000',
+ 'pre_genesis_round': '5000000000',
+ 'validators_drop': '27000000000'}
+
 # TODO define cosmos and ethereum groups from genesis
 
 synth_genesis = []
-group_size = 1000
+group_size = 100
 
 for group, amount in cyber_distribution.items():
     amount = int(amount)
@@ -73,14 +91,69 @@ def random_string(string_length=10):
 
 # Proposals!?
 
+class FastUtils:    
+    # TODO remove duplicates from Agent class
+    max_comission_rate = 0.1
+    claim_probability = 0.01
+    transaction_probability = 0.00001
+    
+    max_transaction_rate = 1
+    
+    def __init__(self, network):
+        self.network = network
+        if len(self.network.agents):
+            self.density = self.transaction_probability / len(network.agents) * self.network.blocks_per_iteration
+    
+    def _create_balances(self):
+        return np.array([agent.balance for agent in self.network.agents])
+    
+    def _set_balances(self, balances):
+        for index, agent in enumerate(self.network.agents):
+            agent.balance = balances[index]
+            
+    def _set_total_comission(self, comission):
+        self.network.transactions_reward = comission
+    
+    def create_similar_random_matrix(self, coo_matrix):
+        rows = coo_matrix.tocoo().row
+        cols = coo_matrix.tocoo().col
+        data = np.random.rand(len(rows))
+        return sps.coo_matrix((data, (rows, cols)), shape=coo_matrix.shape)
+    
+    def do_random_transactions(self):
+        assert self.density > 0, "Transactions density is insignificant"
+        balances = self._create_balances()
+        agents_size = balances.shape[0]
+        
+        random_max_transaction_rates = self.max_transaction_rate * np.random.rand(balances.shape[0])
+        random_total_transaction_rates = sparse_random(agents_size, agents_size, density=self.density)
+        normalized_random_total_transaction_rates = normalize(random_total_transaction_rates, norm='l1', axis=1)
+        total_transaction_amounts = normalized_random_total_transaction_rates.T.multiply(random_max_transaction_rates * balances).T
+
+        transactions_sended = (total_transaction_amounts > 0)
+        random_comission_rates = self.max_comission_rate * self.create_similar_random_matrix(transactions_sended)
+        comission_amounts = total_transaction_amounts.multiply(random_comission_rates)
+        transaction_amounts = total_transaction_amounts - comission_amounts
+
+        income = transaction_amounts.sum(axis=0).A1
+        outcome = transaction_amounts.sum(axis=1).A1 + comission_amounts.sum(axis=1).A1
+        new_balances = balances + income - outcome
+        total_comission = comission_amounts.sum()
+        
+        self._set_balances(balances)
+        self._set_total_comission(total_comission)
+
+
 class Network():
     # Constants
     blocks_per_year = 1/3 * 60 * 60 * 24 * 365 
     max_inflation = 0.12
     min_inflation = 0.5
     inflation_rate = 0.1
-    start_inflation = 0.1
+    start_inflation = 0.6
     bonding_goal = 0.9
+    blocks_per_iteration = 1/3 * 60 * 60 * 24 * 30
+    new_agents_per_iteration = 0.001
     
     # Class fields
     block = -1
@@ -92,7 +165,7 @@ class Network():
     
     @classmethod
     def from_json(self, description, validators=100):
-        network = Network(validators, 0)
+        network = Network(validators, len(description))
         network.agents = []
         for agent_description in description:
             agent = Agent.from_json(network, agent_description)
@@ -113,18 +186,26 @@ class Network():
         for i in range(self.agents_amount):
             agent = Agent(self)
             self.agents.append(agent)
+            
+    def _initialize_fast_utils(self):
+        self.fast_utils = FastUtils(self)
     
     def __init__(self, validators_amount, agents_amount):
         self.validators_amount = validators_amount
         self.agents_amount = agents_amount
         self._create_validators()
         self._create_agents()
+        self._initialize_fast_utils()
         
     def _change_inflation(self):
-        if (self.block == 0) or (self.block % self.blocks_per_year != 0):
+        if (self.block == 0) or ((self.block // self.blocks_per_iteration) % (self.blocks_per_year // self.blocks_per_iteration) != 0):
             return
         
+        print("Inflation changes!")
+        
         current_bonding_rate = self.total_bonding / self.total_balance
+        
+        print(current_bonding_rate)
 
         if (self.bonding_goal < current_bonding_rate):
             self.inflation -= self.inflation_rate
@@ -133,19 +214,31 @@ class Network():
         self.inflation = max(self.min_inflation, min(self.max_inflation, self.inflation))
     
     def _increase_block(self):
-        self.block += 1
+        self.block += self.blocks_per_iteration
         self._change_inflation()
         self.transactions_reward = 0
-        self.block_reward = self.inflation * self.total_balance / self.blocks_per_year
+        self.block_reward = self.inflation * self.total_balance / self.blocks_per_year * self.blocks_per_iteration
         
     def _act_validators(self):
         self.total_balance += self.block_reward
         for validator in tqdm_notebook(self.validators):
             validator.act()
+    
+    def _add_new_agents(self):
+        new_agens_amount = int(self.agents_amount * self.new_agents_per_iteration)
+        self.agents_amount += new_agens_amount
+        for i in range(new_agens_amount):
+            agent = Agent(self)
+            agent.group = "new_agents"
+            agent.genesis_part = 0
+            agent.balance = 0
+            self.agents.append(agent)
             
     def _act_agents(self):
         for agent in tqdm_notebook(self.agents):
             agent.act()
+        self.fast_utils.do_random_transactions()
+        self._add_new_agents()
             
     def _update_stats(self):
         self.stats = {}
@@ -153,7 +246,7 @@ class Network():
             self.stats[agent.group] = self.stats.get(agent.group, 0) + agent.balance
         for agent in self.agents:
             self.stats["unclaimed_" + agent.group] = self.stats.get("unclaimed_" + agent.group, 0) + agent.genesis_part
-        self.stats["inflation"] = self.inflation_rate
+        self.stats["inflation"] = self.inflation
         self.stats["total_balance"] = self.total_balance
         self.stats["total_bonding"] = self.total_bonding
             
@@ -188,7 +281,7 @@ class Network():
         
     def get_voting_power(self, validator):
         # TODO add cache for voting power
-        return validator.total_bonding / self.total_bonding
+        return validator.total_bonding / (self.total_bonding + 0.00000001)
     
     def claim_tokens(self, agent, amount):
         assert agent.genesis_part >= amount
@@ -197,19 +290,6 @@ class Network():
         
     def send_reward(self, validator, agent, rate):
         agent.balance += validator.reward * rate
-
-
-# # Fast operations
-
-class FastUtils:    
-    @classmethod
-    def do_random_transactions(self):
-        pass
-        # Create random matrices
-        # Normalize, multiply by agent balances
-        # Subtract from senders
-        # Add to recipients
-        # Apply comission
 
 
 class NetworkParticipant():
@@ -297,8 +377,8 @@ class Agent(NetworkParticipant):
     
     def act(self):
         self._claim()
-        # TODO most consuming
-        self._do_random_transaction()
+        # TODO no need in this method for now
+#         self._do_random_transaction()
         self._rebond_tokens()
 
 
@@ -459,8 +539,8 @@ network.bond_validator(agent2, validator1, 10)
 network.bond_validator(agent3, validator2, 10)
 
 # print(network.get_voting_power(validator1))
-assert network.get_voting_power(validator1) == 20 / 30
-assert network.get_voting_power(validator2) == 10 / 30
+assert np.abs(network.get_voting_power(validator1) - 20 / 30) < 0.001
+assert np.abs(network.get_voting_power(validator2) - 10 / 30) < 0.001
 # -
 
 # Network should send reward from validator to agent
@@ -483,6 +563,7 @@ assert agent.balance == 10 + 0.1 * 200
 
 # +
 network = Network(1, 1)
+network.blocks_per_iteration = 1
 
 network._increase_block()
 assert network.block == 0
@@ -495,6 +576,7 @@ assert network.block == 1
 
 # +
 network = Network(1, 1)
+network.blocks_per_iteration = 1
 network.transactions_reward = None
 
 network._increase_block()
@@ -509,6 +591,7 @@ network.inflation = 0.1
 network.blocks_per_year = 2
 network.total_balance = 100
 network.block_reward = None
+network.blocks_per_iteration = 1
 
 network._increase_block()
 assert network.block_reward == 0.1 * 100 / 2
@@ -518,12 +601,13 @@ assert network.block_reward == 0.1 * 100 / 2
 
 # +
 network = Network(1, 1)
+network.blocks_per_iteration = 1
 network.start_inflation = 0.1
 network.max_inflation = 0.2
 network.min_inflation = 0.0
 network.inflation_rate = 0.1
 network.blocks_per_year = 2
-network.bonding_goal = 0.5
+network.bonding_goal = 0.9
 
 network.total_bonding = 0
 network.total_balance = 100
@@ -605,6 +689,8 @@ assert network.stats["test"] == 10
 # Agent should send nonzero random transaction to another agent
 
 # +
+# Deprecated: this method has an accelerated implementation
+
 network = Network(1, 2)
 agent = network.agents[0]
 
@@ -709,8 +795,8 @@ network.bond_validator(agent2, validator, 4)
 validator.reward = 20
 
 validator._broadcast_reward()
-assert agent1.balance == (100 - 1) + 20 * 1 / 5
-assert agent2.balance == (100 - 4) + 20 * 4 / 5
+assert np.abs(agent1.balance - ((100 - 1) + 20 * 1 / 5)) < 0.0001
+assert np.abs(agent2.balance - ((100 - 4) + 20 * 4 / 5)) < 0.0001
 # -
 
 # # Big network evaluation
@@ -722,10 +808,6 @@ for i in tqdm_notebook(range(100)):
     network.act()
     print(network.stats)
     all_stats.append(network.stats.copy())
-
-# - add tokens claimed graph (total_genesis - sum)
-# - add grouped balance chart (by cohorts)
-# - add inflation and bonding chart (with bonding goal and max-min inflation)
 
 # # Visualization
 
@@ -747,13 +829,13 @@ plt.legend()
 plt.show()
 # -
 
-# ### Tokens claimed
+# ### Tokens unclaimed
 
 # +
 plt.figure(figsize=(20, 10))
 x = range(len(all_stats))
 y = [
-    [stat["unclaimed_" + group] - stat[group] for stat in all_stats]
+    [stat["unclaimed_" + group] for stat in all_stats]
     for group in cyber_distribution
 ]
 labels = [group for group in cyber_distribution]
@@ -776,18 +858,29 @@ plt.plot(x, inflation_y)
 plt.show()
 # -
 
-# Описание процесса:
-#
-# Вопросы:
-# - Актуальный генезис
-# - Меняется ли количество валидаторов со временем?
-# - Стратегии получения CYB для разных групп генезиса
-# - Кому достается комиссия валидатора?
-# - 
-#
-# Доделать:
+# - Исправить баги
+#     - Пометить неактуальные тесты - готово
+#     - Перенести тесты для быстрого метода
+#     - Проверить тест с валидатором - готово
+#     - Передавать комиссию валидатора агенту-владельцу
+# - Уменьшить частоту дискретизации - готово
+#     - Несколько выплат - аппроксимация
+#     - Частота пересчета - готово
+# - Добавить новых агентов на каждой итерации (каждый интервал сеть растет в N раз)
+# - Добавить быструю реализацию обмена - готово
+
+# # Инфляция не меняется!!!!!!!!!!!!!
+# # Новые агенты не получают транзакции
+# # Claimed и unclaimed не совпадают
+
 # - Увеличить скорость работы через использование numpy
 # - Начальный агент, который раздает генезис транзакции
 
 # - Параметр роста за итерацию + новая когорта
 # - Дискретизация
+
+
+
+
+
+
