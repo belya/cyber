@@ -57,7 +57,7 @@ cyber_distribution = {'cosmos_drop': '5000000000',
 # TODO define cosmos and ethereum groups from genesis
 
 synth_genesis = []
-group_size = 100
+group_size = 1000
 
 for group, amount in cyber_distribution.items():
     amount = int(amount)
@@ -148,9 +148,9 @@ class Network():
     # Constants
     blocks_per_year = 1/3 * 60 * 60 * 24 * 365 
     max_inflation = 0.12
-    min_inflation = 0.5
-    inflation_rate = 0.1
-    start_inflation = 0.6
+    min_inflation = 0.05
+    inflation_rate = 0.01
+    start_inflation = 0.01
     bonding_goal = 0.9
     blocks_per_iteration = 1/3 * 60 * 60 * 24 * 30
     new_agents_per_iteration = 0.001
@@ -158,7 +158,6 @@ class Network():
     # Class fields
     block = -1
     transactions_reward = 0 # Multiple transactions
-    inflation = start_inflation
     total_bonding = 0
     total_balance = 0
     stats = None
@@ -193,6 +192,7 @@ class Network():
     def __init__(self, validators_amount, agents_amount):
         self.validators_amount = validators_amount
         self.agents_amount = agents_amount
+        self.inflation = self.start_inflation
         self._create_validators()
         self._create_agents()
         self._initialize_fast_utils()
@@ -201,12 +201,8 @@ class Network():
         if (self.block == 0) or ((self.block // self.blocks_per_iteration) % (self.blocks_per_year // self.blocks_per_iteration) != 0):
             return
         
-        print("Inflation changes!")
-        
         current_bonding_rate = self.total_bonding / self.total_balance
         
-        print(current_bonding_rate)
-
         if (self.bonding_goal < current_bonding_rate):
             self.inflation -= self.inflation_rate
         else:
@@ -602,12 +598,12 @@ assert network.block_reward == 0.1 * 100 / 2
 # +
 network = Network(1, 1)
 network.blocks_per_iteration = 1
-network.start_inflation = 0.1
+network.inflation = 0.1
 network.max_inflation = 0.2
 network.min_inflation = 0.0
 network.inflation_rate = 0.1
 network.blocks_per_year = 2
-network.bonding_goal = 0.9
+network.bonding_goal = 0.5
 
 network.total_bonding = 0
 network.total_balance = 100
@@ -801,13 +797,15 @@ assert np.abs(agent2.balance - ((100 - 4) + 20 * 4 / 5)) < 0.0001
 
 # # Big network evaluation
 
-network = Network.from_json(synth_genesis, 100)
+network = Network.from_json(synth_genesis, 146)
 
 all_stats = []
-for i in tqdm_notebook(range(100)):
+for i in tqdm_notebook(range(1000)):
     network.act()
-    print(network.stats)
+#     print(network.stats)
     all_stats.append(network.stats.copy())
+
+network.stats
 
 # # Visualization
 
@@ -858,29 +856,9 @@ plt.plot(x, inflation_y)
 plt.show()
 # -
 
-# - Исправить баги
-#     - Пометить неактуальные тесты - готово
-#     - Перенести тесты для быстрого метода
-#     - Проверить тест с валидатором - готово
-#     - Передавать комиссию валидатора агенту-владельцу
-# - Уменьшить частоту дискретизации - готово
-#     - Несколько выплат - аппроксимация
-#     - Частота пересчета - готово
-# - Добавить новых агентов на каждой итерации (каждый интервал сеть растет в N раз)
-# - Добавить быструю реализацию обмена - готово
+# Доработки
+# - Нет агента, который получал бы комиссию от валидатора
 
-# # Инфляция не меняется!!!!!!!!!!!!!
-# # Новые агенты не получают транзакции
-# # Claimed и unclaimed не совпадают
-
-# - Увеличить скорость работы через использование numpy
-# - Начальный агент, который раздает генезис транзакции
-
-# - Параметр роста за итерацию + новая когорта
-# - Дискретизация
-
-
-
-
-
-
+# Баги
+# - Новые агенты не получают транзакции
+# - Claimed и unclaimed не совпадают
